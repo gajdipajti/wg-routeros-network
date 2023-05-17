@@ -106,8 +106,8 @@ foreach(@idx){
         print CLIENT "/interface list member add interface=$wginterface list=VPN\n";
         say("/ip address add address=$wgnetwork.$wg[$_]{id}/24 interface=$wginterface network=$wgnetwork.0");
         print CLIENT "/ip address add address=$wgnetwork.$wg[$_]{id}/24 interface=$wginterface network=$wgnetwork.0\n";
-        say('/ip firewall mangle add action=change-mss chain=forward new-mss=1300 out-interface=ether1 protocol=tcp tcp-flags=syn tcp-mss=1301-65535');
-        print CLIENT "/ip firewall mangle add action=change-mss chain=forward new-mss=1300 out-interface=ether1 protocol=tcp tcp-flags=syn tcp-mss=1301-65535\n";
+        say('/ip firewall nat add action=masquerade chain=srcnat out-interface-list=VPN');
+        print CLIENT "/ip firewall nat add action=masquerade chain=srcnat out-interface-list=VPN\n";
         say('/system ntp client set enabled=yes');
         print CLIENT "/system ntp client set enabled=yes\n";
         say('/system clock set time-zone-name=Europe/Budapest');
