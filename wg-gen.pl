@@ -125,7 +125,7 @@ foreach(@idx){
         say('/interface list add name=VPN');
         print CLIENT "/interface list add name=VPN\n";
         say("/interface bridge port add bridge=bridge-workshop interface=eoip-workshop");
-        print CLIENT "/interface bridge port add bridge=bridge-workshop interface=eoip-workshop";
+        print CLIENT "/interface bridge port add bridge=bridge-workshop interface=eoip-workshop\n";
         say("/interface list member add interface=$wginterface list=VPN");
         print CLIENT "/interface list member add interface=$wginterface list=VPN\n";
         say("/ip address add address=$wgnetwork.$wg[$_]{id}/24 interface=$wginterface network=$wgnetwork.0");
