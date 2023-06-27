@@ -1,4 +1,4 @@
-/interface wireguard add listen-port=13231 mtu=1420 name=wg-workshop private-key="+HC0suct7I4eo74ZvLSdGMCGHZ5xb8HV+g0VnmjLAkg="
+/interface wireguard add listen-port=13231 mtu=1420 name=wg-workshop private-key="iAGfYtMpwMioGgeDGtQ+wpGkUfypx5dGWMSJc5RRZEw="
 /interface bridge add name=bridge-eoip
 /interface eoip add name=eoip-workshot remote-address=10.20.1.1 tunnel-id=18
 /ip pool add name=local_18 ranges=10.10.18.2-10.10.18.14
@@ -16,5 +16,5 @@
 /system ntp client set enabled=yes
 /system clock set time-zone-name=Europe/Budapest
 /system identity set name="WG_ID 18"
-/interface wireguard peers add allowed-address=10.20.1.1/32,10.10.1.0/28,10.10.0.0/16 endpoint-address=192.168.100.100 endpoint-port=13231 comment="WID 1" interface=wg-workshop persistent-keepalive=1m public-key="Af+zFOo7btMELGzTNEiN7yIOegwiS52MwG3TSyvKwhQ="
+/interface wireguard peers add allowed-address=10.20.1.1/32,10.10.1.0/28,10.10.0.0/16 endpoint-address=192.168.100.100 endpoint-port=13231 comment="WID 1" interface=wg-workshop persistent-keepalive=1m public-key="IXzWoBGw4BotvS3uVBIcljCxpU9pM/HTuSAw6VJdsX0="
 /ip route add disabled=no distance=1 dst-address=10.10.1.0/28 gateway=10.20.1.1 pref-src="" routing-table=main scope=30 suppress-hw-offload=no target-scope=10

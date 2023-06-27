@@ -94,7 +94,7 @@ foreach(@idx){
         say("/interface eoip add name=eoip-$wg[$_]{id} remote-address=$wgnetwork.$wg[$_]{id} tunnel-id=$wg[$_]{id}");
         print SERVER "/interface eoip add name=eoip-$wg[$_]{id} remote-address=$wgnetwork.$wg[$_]{id} tunnel-id=$wg[$_]{id}\n";
         say("/interface bridge port add bridge=bridge-workshop interface=eoip-$wg[$_]{id}");
-        print SERVER "/interface bridge port add bridge=bridge-workshop interface=eoip-$wg[$_]{id}";
+        print SERVER "/interface bridge port add bridge=bridge-workshop interface=eoip-$wg[$_]{id}\n";
     }
 }
 
