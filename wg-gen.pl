@@ -1,13 +1,14 @@
 #!/usr/bin/perl -w
 #	Summary:	Generate Wireguard network for RouterOS and regular clients
-#	Version:	0.3 (2026-10-12)
+#	Version:	0.4 (2026-10-12)
 #	Package:	crowbar-labs
 #	License:	GPLv3 - https://choosealicense.com/licenses/gpl-3.0/
 #	Developer:	gajdost
 #	Changelog:	0.2 - regular client configs + QR codes, emit() helper, bug fixes
 #			    0.3 - single WG network; args are <routeros clients> <regular clients>
-#	Known limits:	Needs 'wg' (wireguard-tools) and optionally 'qrencode'
-#                   `sudo apt install qrencode`
+#               0.4 - replace qrencode with libimager-qrcode-perl
+#	Known limits:	Needs 'wg' (wireguard-tools) and optionally 'libimager-qrcode-perl'
+#                   `sudo apt install libimager-qrcode-perl`
 #			        Max 253 clients in total (one /24 WG network)
 
 #	Run:		code/wg-gen.pl 10 5     # 10 RouterOS + 5 regular clients
@@ -156,8 +157,8 @@ say('# RouterOS Client Config END');
 say('# Regular Client Config');
 
 make_path('client-configs');
-my $have_qr = system('which qrencode >/dev/null 2>&1') == 0;
-say('#W# qrencode not found, skipping QR codes') if !$have_qr && @rcids;
+my $have_qr = eval { require Imager::QRCode; 1 };
+say('#W# Imager::QRCode not found, skipping QR codes') if !$have_qr && @rcids;
 
 foreach my $id (@rcids) {
     my $conf = "client-configs/rc_$id.conf";
@@ -179,9 +180,15 @@ EOF
     say("# $conf written");
 
     if ($have_qr) {
+        my $text = do {
+            open(my $in, '<', $conf) or die "$conf: $!";
+            local $/;
+            <$in>;
+        };
+        my $qr  = Imager::QRCode->new(size => 6, margin => 4, level => 'M', casesensitive => 1);
+        my $img = $qr->plot($text);
         my $png = "client-configs/rc_$id.png";
-        system('qrencode', '-t', 'PNG', '-o', $png, '-r', $conf) == 0
-            or warn "qrencode failed for client $id\n";
+        $img->write(file => $png) or warn "QR failed for client $id: ", $img->errstr, "\n";
     }
 }
 
