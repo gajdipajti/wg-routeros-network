@@ -1,55 +1,82 @@
 #!/usr/bin/perl -w
-#	Summary:	Generate Wireguard network for RouterOS
-#	Version:	0.1 (2023-05-10)
+#	Summary:	Generate Wireguard network for RouterOS and regular clients
+#	Version:	0.3 (2026-10-12)
 #	Package:	crowbar-labs
 #	License:	GPLv3 - https://choosealicense.com/licenses/gpl-3.0/
 #	Developer:	gajdost
-#	Changelog:	
-#	Known limits:	
+#	Changelog:	0.2 - regular client configs + QR codes, emit() helper, bug fixes
+#			    0.3 - single WG network; args are <routeros clients> <regular clients>
+#	Known limits:	Needs 'wg' (wireguard-tools) and optionally 'qrencode'
+#                   `sudo apt install qrencode`
+#			        Max 253 clients in total (one /24 WG network)
 
-#	Run:		code/wg-gen.pl 10
+#	Run:		code/wg-gen.pl 10 5     # 10 RouterOS + 5 regular clients
+#			    code/wg-gen.pl 0 10     # 10 regular clients only
+#	The server is always generated as ID 1 (not counted in the arguments).
+#	IDs: 1 = server, 2..R+1 = RouterOS clients, R+2..R+C+1 = regular clients
 
 use strict;
 use warnings;
 use feature qw(say);    # For 5.10 extra function.
 use File::Path qw(make_path);   # https://perldoc.perl.org/File::Path
 
+umask 077;   # keys are written to files, keep them private
+
 # Global variables
 my $wginterface = 'wg-workshop';
-my $wgendpoint = '192.168.100.100';
-my $wgport = 13231;
-my $wgnetwork = '10.20.1';
-my $lannetwork = '10.10';
-my $idmax;
-if ($#ARGV != 0) {
+my $wgendpoint = '192.168.100.100';   # use a domain name here for regular clients if you have one
+my $wgport = 13231;					  # set the port
+my $wgnetwork = '10.20.1';            # wireguard network
+my $lannetwork = '10.10';             # network behind RouterOS peers
+my ($rosmax, $rcmax);
+
+if ($#ARGV != 1) {
     say('#W# Using default values!');
-	$idmax = 100;
+    ($rosmax, $rcmax) = (100, 0);
 } else {
-	$idmax = $ARGV[0];
+    ($rosmax, $rcmax) = @ARGV;
+}
+die "Arguments must be non-negative integers\n"
+    unless $rosmax =~ /^\d+$/ && $rcmax =~ /^\d+$/;
+die "Too many clients: max 253 in total\n" if $rosmax + $rcmax > 253;
+
+my @rosids = (2 .. $rosmax + 1);
+my @rcids  = ($rosmax + 2 .. $rosmax + $rcmax + 1);
+my @allids = (1, @rosids, @rcids);
+my %isrc   = map { $_ => 1 } @rcids;
+my @wg;
+
+# Print a line to stdout and to the given file handle
+sub emit {
+    my ($fh, $line) = @_;
+    say($line);
+    print $fh "$line\n";
 }
 
-my @idx = (1..$idmax);
-my $wgpriv;
-my @wg;
-my $wgpub;
+sub genkeys {
+    my $priv = `wg genkey`;
+    chomp($priv);
+    my $pub = `echo '$priv' | wg pubkey`;
+    chomp($pub);
+    return ($priv, $pub);
+}
 
 my $tablef = 'table.csv';
-open(TABLE,'>',$tablef) or die $!;
+open(my $table, '>', $tablef) or die "$tablef: $!";
 
-say("ID;\tWG-IP;\t\tLAN-IP;\t\tWG-PRIV;\t\t\t\t\tWG-PUB;");
-print TABLE "ID;\tWG-IP;\tLAN-IP;\tWG-PRIV;\tWG-PUB;\n";
+say("ID;\tTYPE;\tWG-IP;\t\tLAN-IP;\t\tWG-PRIV;\t\t\t\t\tWG-PUB;");
+print $table "ID;\tTYPE;\tWG-IP;\tLAN-IP;\tWG-PRIV;\tWG-PUB;\n";
 
-foreach(@idx){
-    $wgpriv = `wg genkey`;
-    chomp($wgpriv);
-    $wgpub  = `echo '$wgpriv' | wg pubkey`;
-    chomp($wgpub);
-    say("$_;\t$wgnetwork.$_;\t$lannetwork.$_.1/28;\t$wgpriv;\t$wgpub;");
-    print TABLE "$_;\t$wgnetwork.$_;\t$lannetwork.$_.1/28;\t$wgpriv;\t$wgpub;\n";
-    $wg[$_] = {id => $_, wgip => "$wgnetwork.$_", lanip => "$lannetwork.$_.1/28", wgpriv => $wgpriv, wgpub => $wgpub};
+foreach my $id (@allids) {
+    my ($wgpriv, $wgpub) = genkeys();
+    my $type  = $id == 1 ? 'server' : $isrc{$id} ? 'regular' : 'routeros';
+    my $lanip = $isrc{$id} ? '-' : "$lannetwork.$id.1/28";
+    say("$id;\t$type;\t$wgnetwork.$id;\t$lanip;\t$wgpriv;\t$wgpub;");
+    print $table "$id;\t$type;\t$wgnetwork.$id;\t$lanip;\t$wgpriv;\t$wgpub;\n";
+    $wg[$id] = {id => $id, wgip => "$wgnetwork.$id", lanip => $lanip, wgpriv => $wgpriv, wgpub => $wgpub};
 }
 
-close(TABLE);
+close($table);
 
 # Generate server config
 # id 1 is server everything else is peer
@@ -57,109 +84,105 @@ close(TABLE);
 make_path('routeros-configs');
 my $servercf = 'routeros-configs/server.rsc';
 
-open(SERVER,'>',$servercf) or die $!;
+open(my $server, '>', $servercf) or die "$servercf: $!";
+
+my $s = $wg[1]{id};
 
 say('# Server Config:');
-say("/interface wireguard add listen-port=$wgport mtu=1420 name=$wginterface private-key=\"$wg[1]{wgpriv}\"");
-print SERVER "/interface wireguard add listen-port=$wgport mtu=1420 name=$wginterface private-key=\"$wg[1]{wgpriv}\"\n";
-say("/ip pool add name=local_$wg[1]{id} ranges=$lannetwork.$wg[1]{id}.2-$lannetwork.$wg[1]{id}.14");
-print CLIENT "/ip pool add name=local_$wg[1]{id} ranges=$lannetwork.$wg[1]{id}.2-$lannetwork.$wg[1]{id}.14\n";
-say("/ip dhcp-server add address-pool=local_$wg[1]{id} interface=bridge name=dhcp_$wg[1]{id}");
-print CLIENT "/ip dhcp-server add address-pool=local_$wg[1]{id} interface=bridge name=dhcp_$wg[1]{id}\n";
-say('/interface list add name=VPN');
-print SERVER "/interface list add name=VPN\n";
-say("/interface list member add interface=$wginterface list=VPN");
-print SERVER "/interface list member add interface=$wginterface list=VPN\n";
-say("/ip address add address=$wgnetwork.$wg[1]{id}/24 interface=$wginterface network=$wgnetwork.0");
-print SERVER "/ip address add address=$wgnetwork.$wg[1]{id}/24 interface=$wginterface network=$wgnetwork.0\n";
-say("/ip address add address=$lannetwork.$wg[1]{id}.1/28 interface=bridge network=$lannetwork.$wg[1]{id}.0");
-print CLIENT "/ip address add address=$lannetwork.$wg[1]{id}.1/28 interface=bridge network=$lannetwork.$wg[1]{id}.0\n";
-say("/ip dhcp-server network add address=$lannetwork.$wg[1]{id}.0/28 dns-server=$lannetwork.$wg[1]{id}.1 gateway=$lannetwork.$wg[1]{id}.1");
-print CLIENT "/ip dhcp-server network add address=$lannetwork.$wg[1]{id}.0/28 dns-server=$lannetwork.$wg[1]{id}.1 gateway=$lannetwork.$wg[1]{id}.1\n";
-say('/ip firewall mangle add action=change-mss chain=forward new-mss=1300 out-interface=ether1 protocol=tcp tcp-flags=syn tcp-mss=1301-65535');
-print SERVER "/ip firewall mangle add action=change-mss chain=forward new-mss=1300 out-interface=ether1 protocol=tcp tcp-flags=syn tcp-mss=1301-65535\n";
-say('/system ntp client set enabled=yes');
-print SERVER "/system ntp client set enabled=yes\n";
-say('/system clock set time-zone-name=Europe/Budapest');
-print SERVER "/system clock set time-zone-name=Europe/Budapest\n";
-say("/system identity set name=\"WG_ID $wg[1]{id}\"");
-print SERVER "/system identity set name=\"WG_ID $wg[1]{id}\"\n";
+emit($server, "/interface wireguard add listen-port=$wgport mtu=1420 name=$wginterface private-key=\"$wg[1]{wgpriv}\"");
+emit($server, "/ip pool add name=local_$s ranges=$lannetwork.$s.2-$lannetwork.$s.14");
+emit($server, "/ip dhcp-server add address-pool=local_$s interface=bridge name=dhcp_$s");
+emit($server, '/interface list add name=VPN');
+emit($server, "/interface list member add interface=$wginterface list=VPN");
+emit($server, "/ip address add address=$wgnetwork.$s/24 interface=$wginterface network=$wgnetwork.0");
+emit($server, "/ip address add address=$lannetwork.$s.1/28 interface=bridge network=$lannetwork.$s.0");
+emit($server, "/ip dhcp-server network add address=$lannetwork.$s.0/28 dns-server=$lannetwork.$s.1 gateway=$lannetwork.$s.1");
+emit($server, '/ip firewall mangle add action=change-mss chain=forward new-mss=1300 out-interface=ether1 protocol=tcp tcp-flags=syn tcp-mss=1301-65535');
+emit($server, '/system ntp client set enabled=yes');
+emit($server, '/system clock set time-zone-name=Europe/Budapest');
+emit($server, "/system identity set name=\"WG_ID $s\"");
 
-foreach(@idx){
-    unless($wg[$_]{id} == 1){
-        say("/interface wireguard peers add allowed-address=$wgnetwork.$wg[$_]{id}/32,$lannetwork.$wg[$_]{id}.0/28 comment=\"WID $wg[$_]{id}\" interface=$wginterface persistent-keepalive=1m public-key=\"$wg[$_]{wgpub}\"");
-        print SERVER "/interface wireguard peers add allowed-address=$wgnetwork.$wg[$_]{id}/32,$lannetwork.$wg[$_]{id}.0/28 comment=\"WID $wg[$_]{id}\" interface=$wginterface persistent-keepalive=1m public-key=\"$wg[$_]{wgpub}\"\n";
-        say("/ip route add disabled=no distance=1 dst-address=$lannetwork.$wg[$_]{id}.0/28 gateway=$wgnetwork.$wg[$_]{id} pref-src=\"\" routing-table=main scope=30 suppress-hw-offload=no target-scope=10");
-        print SERVER "/ip route add disabled=no distance=1 dst-address=$lannetwork.$wg[$_]{id}.0/28 gateway=$wgnetwork.$wg[$_]{id} pref-src=\"\" routing-table=main scope=30 suppress-hw-offload=no target-scope=10\n";
-        say("/interface eoip add name=eoip-$wg[$_]{id} remote-address=$wgnetwork.$wg[$_]{id} tunnel-id=$wg[$_]{id}");
-        print SERVER "/interface eoip add name=eoip-$wg[$_]{id} remote-address=$wgnetwork.$wg[$_]{id} tunnel-id=$wg[$_]{id}\n";
-        say("/interface bridge port add bridge=bridge-workshop interface=eoip-$wg[$_]{id}");
-        print SERVER "/interface bridge port add bridge=bridge-workshop interface=eoip-$wg[$_]{id}\n";
-    }
+foreach my $id (@rosids) {
+    emit($server, "/interface wireguard peers add allowed-address=$wgnetwork.$id/32,$lannetwork.$id.0/28 comment=\"WID $id\" interface=$wginterface persistent-keepalive=1m public-key=\"$wg[$id]{wgpub}\"");
+    emit($server, "/ip route add disabled=no distance=1 dst-address=$lannetwork.$id.0/28 gateway=$wgnetwork.$id pref-src=\"\" routing-table=main scope=30 suppress-hw-offload=no target-scope=10");
+#    emit($server, "/interface eoip add name=eoip-$id remote-address=$wgnetwork.$id tunnel-id=$id");
+#    emit($server, "/interface bridge port add bridge=bridge-workshop interface=eoip-$id");
 }
 
-close(SERVER);
+foreach my $id (@rcids) {
+    emit($server, "/interface wireguard peers add allowed-address=$wgnetwork.$id/32 comment=\"RC $id\" interface=$wginterface public-key=\"$wg[$id]{wgpub}\"");
+}
+
+close($server);
 
 say('# Server Config END');
 say('# RouterOS Client Config:');
-foreach(@idx){
-    unless($wg[$_]{id} == 1){
-        say("#ID $wg[$_]{id}:");
+foreach my $id (@rosids) {
+    say("#ID $id:");
 
-        my $clientcf = "routeros-configs/client_$wg[$_]{id}.rsc";
+    my $clientcf = "routeros-configs/client_$id.rsc";
+    open(my $client, '>', $clientcf) or die "$clientcf: $!";
 
-        open(CLIENT,'>',$clientcf) or die $!;
+    emit($client, "/interface wireguard add listen-port=$wgport mtu=1420 name=$wginterface private-key=\"$wg[$id]{wgpriv}\"");
+    emit($client, '/interface bridge add name=bridge-workshop');
+#    emit($client, "/interface eoip add name=eoip-workshop remote-address=$wgnetwork.$s tunnel-id=$id");
+    emit($client, "/ip pool add name=local_$id ranges=$lannetwork.$id.2-$lannetwork.$id.14");
+    emit($client, "/ip dhcp-server add address-pool=local_$id interface=bridge name=dhcp_$id");
+    emit($client, '/routing table add disabled=no fib name=wg');
+    emit($client, '/interface list add name=VPN');
+    emit($client, '/interface bridge port add bridge=bridge-workshop interface=eoip-workshop');
+    emit($client, "/interface list member add interface=$wginterface list=VPN");
+    emit($client, "/ip address add address=$wgnetwork.$id/24 interface=$wginterface network=$wgnetwork.0");
+    emit($client, "/ip address add address=$lannetwork.$id.1/28 interface=bridge network=$lannetwork.$id.0");
+    emit($client, "/ip dhcp-server network add address=$lannetwork.$id.0/28 dns-server=$wgnetwork.$s gateway=$lannetwork.$id.1");
+    emit($client, "/ip firewall mangle add action=mark-routing chain=prerouting new-routing-mark=wg disabled=yes comment=\"route every traffic into the tunnel\" passthrough=yes src-address=$lannetwork.$id.0/28");
+    emit($client, "/ip firewall address-list add address=$lannetwork.$id.0/28 list=LOCAL$id");
+    emit($client, "/ip route add disabled=no distance=1 dst-address=0.0.0.0/0 gateway=$wgnetwork.$s pref-src=\"\" routing-table=wg scope=30 suppress-hw-offload=no target-scope=10");
+    emit($client, '/system ntp client set enabled=yes');
+    emit($client, '/system clock set time-zone-name=Europe/Budapest');
+    emit($client, "/system identity set name=\"WG_ID $id\"");
 
-        say("/interface wireguard add listen-port=$wgport mtu=1420 name=$wginterface private-key=\"$wg[$_]{wgpriv}\"");
-        print CLIENT "/interface wireguard add listen-port=$wgport mtu=1420 name=$wginterface private-key=\"$wg[$_]{wgpriv}\"\n";
-        say('/interface bridge add name=bridge-eoip');
-        print CLIENT "/interface bridge add name=bridge-eoip\n";
-        say("/interface eoip add name=eoip-workshop remote-address=$wgnetwork.$wg[1]{id} tunnel-id=$wg[$_]{id}");
-        print CLIENT "/interface eoip add name=eoip-workshot remote-address=$wgnetwork.$wg[1]{id} tunnel-id=$wg[$_]{id}\n";
-        say("/ip pool add name=local_$wg[$_]{id} ranges=$lannetwork.$wg[$_]{id}.2-$lannetwork.$wg[$_]{id}.14");
-        print CLIENT "/ip pool add name=local_$wg[$_]{id} ranges=$lannetwork.$wg[$_]{id}.2-$lannetwork.$wg[$_]{id}.14\n";
-        say("/ip dhcp-server add address-pool=local_$wg[$_]{id} interface=bridge name=dhcp_$wg[$_]{id}");
-        print CLIENT "/ip dhcp-server add address-pool=local_$wg[$_]{id} interface=bridge name=dhcp_$wg[$_]{id}\n";
-        say('/routing table add disabled=no fib name=wg');
-        print CLIENT "/routing table add disabled=no fib name=wg\n";
-        say('/interface list add name=VPN');
-        print CLIENT "/interface list add name=VPN\n";
-        say("/interface bridge port add bridge=bridge-workshop interface=eoip-workshop");
-        print CLIENT "/interface bridge port add bridge=bridge-workshop interface=eoip-workshop\n";
-        say("/interface list member add interface=$wginterface list=VPN");
-        print CLIENT "/interface list member add interface=$wginterface list=VPN\n";
-        say("/ip address add address=$wgnetwork.$wg[$_]{id}/24 interface=$wginterface network=$wgnetwork.0");
-        print CLIENT "/ip address add address=$wgnetwork.$wg[$_]{id}/24 interface=$wginterface network=$wgnetwork.0\n";
-        say("/ip address add address=$lannetwork.$wg[$_]{id}.1/28 interface=bridge network=$lannetwork.$wg[$_]{id}.0");
-        print CLIENT "/ip address add address=$lannetwork.$wg[$_]{id}.1/28 interface=bridge network=$lannetwork.$wg[$_]{id}.0\n";
-        say("/ip dhcp-server network add address=$lannetwork.$wg[$_]{id}.0/28 dns-server=$wgnetwork.$wg[1]{id} gateway=$lannetwork.$wg[$_]{id}.1");
-        print CLIENT "/ip dhcp-server network add address=$lannetwork.$wg[$_]{id}.0/28 dns-server=$wgnetwork.$wg[1]{id} gateway=$lannetwork.$wg[$_]{id}.1\n";
-        say("/ip firewall mangle add action=mark-routing chain=prerouting new-routing-mark=wg disabled=yes comment=\"route every traffic into the tunnel\" passthrough=yes src-address=$lannetwork.$wg[$_]{id}.0/28");
-        print CLIENT "/ip firewall mangle add action=mark-routing chain=prerouting new-routing-mark=wg disabled=yes comment=\"route every traffic into the tunnel\" passthrough=yes src-address=$lannetwork.$wg[$_]{id}.0/28\n";
-        say("/ip firewall address-list add address=$lannetwork.$wg[$_]{id}.0/28 list=LOCAL$wg[$_]{id}");
-        print CLIENT "/ip firewall address-list add address=$lannetwork.$wg[$_]{id}.0/28 list=LOCAL$wg[$_]{id}\n";
-        say("/ip route add disabled=no distance=1 dst-address=0.0.0.0/0 gateway=$wgnetwork.$wg[1]{id} pref-src=\"\" routing-table=wg scope=30 suppress-hw-offload=no target-scope=10");
-        print CLIENT "/ip route add disabled=no distance=1 dst-address=0.0.0.0/0 gateway=$wgnetwork.$wg[1]{id} pref-src=\"\" routing-table=wg scope=30 suppress-hw-offload=no target-scope=10\n";
-        say('/system ntp client set enabled=yes');
-        print CLIENT "/system ntp client set enabled=yes\n";
-        say('/system clock set time-zone-name=Europe/Budapest');
-        print CLIENT "/system clock set time-zone-name=Europe/Budapest\n";
-        say("/system identity set name=\"WG_ID $wg[$_]{id}\"");
-        print CLIENT "/system identity set name=\"WG_ID $wg[$_]{id}\"\n";
+    # WG subnet is a /24 so RouterOS clients can also reach the regular clients through the server
+    emit($client, "/interface wireguard peers add allowed-address=$wgnetwork.0/24,$lannetwork.$s.0/28,$lannetwork.0.0/16 endpoint-address=$wgendpoint endpoint-port=$wgport comment=\"WID $s\" interface=$wginterface persistent-keepalive=1m public-key=\"$wg[1]{wgpub}\"");
+    emit($client, "/ip route add disabled=no distance=1 dst-address=$lannetwork.$s.0/28 gateway=$wgnetwork.$s pref-src=\"\" routing-table=main scope=30 suppress-hw-offload=no target-scope=10");
 
-        say("/interface wireguard peers add allowed-address=$wgnetwork.$wg[1]{id}/32,$lannetwork.$wg[1]{id}.0/28,$lannetwork.0.0/16 endpoint-address=$wgendpoint endpoint-port=$wgport comment=\"WID $wg[1]{id}\" interface=$wginterface persistent-keepalive=1m public-key=\"$wg[1]{wgpub}\"");
-        print CLIENT "/interface wireguard peers add allowed-address=$wgnetwork.$wg[1]{id}/32,$lannetwork.$wg[1]{id}.0/28,$lannetwork.0.0/16 endpoint-address=$wgendpoint endpoint-port=$wgport comment=\"WID $wg[1]{id}\" interface=$wginterface persistent-keepalive=1m public-key=\"$wg[1]{wgpub}\"\n";
-        say("/ip route add disabled=no distance=1 dst-address=$lannetwork.$wg[1]{id}.0/28 gateway=$wgnetwork.$wg[1]{id} pref-src=\"\" routing-table=main scope=30 suppress-hw-offload=no target-scope=10");
-        print CLIENT "/ip route add disabled=no distance=1 dst-address=$lannetwork.$wg[1]{id}.0/28 gateway=$wgnetwork.$wg[1]{id} pref-src=\"\" routing-table=main scope=30 suppress-hw-offload=no target-scope=10\n";
+    close($client);
 
-        close(CLIENT);
-
-        say("#ID $wg[$_]{id} END");
-    }
+    say("#ID $id END");
 }
 
 say('# RouterOS Client Config END');
 
 say('# Regular Client Config');
-say('### TODO ###');
+
+make_path('client-configs');
+my $have_qr = system('which qrencode >/dev/null 2>&1') == 0;
+say('#W# qrencode not found, skipping QR codes') if !$have_qr && @rcids;
+
+foreach my $id (@rcids) {
+    my $conf = "client-configs/rc_$id.conf";
+    open(my $fh, '>', $conf) or die "$conf: $!";
+    print $fh <<"EOF";
+[Interface]
+PrivateKey = $wg[$id]{wgpriv}
+ListenPort = $wgport
+Address = $wgnetwork.$id/32
+DNS = $wgnetwork.$s
+
+[Peer]
+PublicKey = $wg[1]{wgpub}
+AllowedIPs = $wgnetwork.0/24, $lannetwork.0.0/16
+Endpoint = $wgendpoint:$wgport
+PersistentKeepalive = 60
+EOF
+    close($fh);
+    say("# $conf written");
+
+    if ($have_qr) {
+        my $png = "client-configs/rc_$id.png";
+        system('qrencode', '-t', 'PNG', '-o', $png, '-r', $conf) == 0
+            or warn "qrencode failed for client $id\n";
+    }
+}
+
 say('# Regular Client Config END');
