@@ -7,7 +7,6 @@ Currently implemented functions in the wg-gen.pl Perl script:
 * Generate a table.csv with all the keys pairs, tunnel ip addresses and LAN networks.
 * Generate server and client configuration, which include:
   * Wireguard interface and peer configuration in a 1 server - N peer network.
-  * EoIP tunnels to the server with a bridge configuration on the clients (no physical interface is added).
   * Set up static routes to reach each peer's LAN subnet.
   * We only NAT at the wireguard tunnel endpoints WAN interface.
   * Implement the routing of 0.0.0.0/0 into the tunnel using routing-mark and a new routing table. To disable this, just disable the mangle firewall rule.
@@ -15,19 +14,20 @@ Currently implemented functions in the wg-gen.pl Perl script:
 
 Missing functionality:
 
-* change static routes to OSPFv2.
-* configure the peer's wireless interface with CAPsMAN.
-* generate configuration files for Linux, Windows, Android, iOS.
-* generate the QR code for mobile clients.
+* [ ] change static routes to OSPFv2.
+* [ ] configure the peer's wireless interface with CAPsMAN.
+* [x] generate configuration files for Linux, Windows, Android.
+* [x] generate the QR code for mobile clients.
 
 ## Perl script
 
-```bash
-./wg-gen.pl 21
-```
+Install on ubuntu: `sudo apt install wireguard-tools libimager-qrcode-perl`
 
-To generate QR Code in the Perl script (not yet implemented), install the following ubuntu package:
-```libimager-qrcode-perl```
+This will generate 5 RouterOS peers and 21 Linux, Windows, Android...
+
+```bash
+./wg-gen.pl 5 21
+```
 
 ## Old table generation
 
